@@ -426,6 +426,96 @@ Use `--learn` flag to get explanations during scans. Here's a quick reference:
 
 ---
 
+## 🧪 Local Vulnerable Lab
+
+Practice your skills safely with our Docker-based vulnerable lab. Test BountyBoy against intentionally vulnerable applications before going after real targets.
+
+### Quick Start
+
+```bash
+# Start the lab (requires Docker)
+cd lab
+docker-compose up -d
+
+# Wait ~30 seconds for containers to initialize
+```
+
+### Available Targets
+
+| Application | URL | Description |
+|-------------|-----|-------------|
+| **DVWA** | http://localhost:8080 | Damn Vulnerable Web App - SQLi, XSS, Command Injection, LFI |
+| **Juice Shop** | http://localhost:3000 | OWASP Juice Shop - Modern web app vulnerabilities |
+
+### Testing DVWA
+
+DVWA has 4 security levels: Low, Medium, High, Impossible. Test your bypass techniques!
+
+```bash
+# 1. Setup DVWA (first time only)
+#    Go to http://localhost:8080/setup.php
+#    Click "Create / Reset Database"
+
+# 2. Login: admin / password
+
+# 3. Run the DVWA tester
+source venv/bin/activate
+python test_dvwa.py
+
+# 4. Enter your PHPSESSID cookie (from browser DevTools)
+# 5. Choose security level (1-4)
+```
+
+**Sample Output (High Security):**
+```
+═══ Testing SQL Injection ═══
+○ Basic SQLi                    # Blocked
+🚨 Comment bypass SQLi          # Bypassed!
+
+═══ Testing Command Injection ═══
+○ Semicolon injection           # Blocked  
+🚨 Newline injection            # Bypassed!
+
+═══ Testing Local File Inclusion ═══
+○ Basic LFI                     # Blocked
+🚨 File protocol                # Bypassed!
+```
+
+### Testing Juice Shop
+
+```bash
+# Run full scan against Juice Shop
+source venv/bin/activate
+python test_lab.py
+
+# Or use ultimate.py
+python ultimate.py -t localhost:3000 --standard
+```
+
+### What You'll Find
+
+| Target | Vulnerability Types |
+|--------|---------------------|
+| **DVWA** | SQLi, XSS, Command Injection, LFI, CSRF, File Upload, Brute Force |
+| **Juice Shop** | SQLi, XSS, IDOR, JWT flaws, XXE, SSRF, Broken Auth, and 100+ challenges |
+
+### Stop the Lab
+
+```bash
+cd lab
+docker-compose down
+```
+
+### Why Use the Lab?
+
+1. **Safe Practice** - No legal issues, it's your own system
+2. **Test Bypasses** - Try different security levels
+3. **Validate Tools** - Confirm BountyBoy detects real vulns
+4. **Learn Techniques** - Understand how vulnerabilities work
+5. **Develop Payloads** - Build your payload library
+
+---
+
 ## 🤝 Contributing
 
 PRs welcome! Areas to contribute:

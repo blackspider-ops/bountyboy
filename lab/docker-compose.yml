@@ -1,0 +1,86 @@
+# BountyBoy Vulnerable Lab
+# A collection of intentionally vulnerable applications for testing
+#
+# Usage:
+#   cd lab
+#   docker-compose up -d
+#   
+# Access:
+#   - DVWA:        http://localhost:8080
+#   - Juice Shop:  http://localhost:3000
+#   - WebGoat:     http://localhost:8081/WebGoat
+#   - bWAPP:       http://localhost:8082
+#   - NodeGoat:    http://localhost:4000
+#
+# Stop:
+#   docker-compose down
+
+version: '3.8'
+
+services:
+  # DVWA - Damn Vulnerable Web Application
+  # Classic PHP vulnerabilities: SQLi, XSS, CSRF, File Upload, etc.
+  dvwa:
+    image: vulnerables/web-dvwa
+    container_name: bountyboy-dvwa
+    ports:
+      - "8080:80"
+    environment:
+      - MYSQL_ROOT_PASSWORD=dvwa
+    restart: unless-stopped
+
+  # OWASP Juice Shop - Modern vulnerable app
+  # Node.js app with 100+ vulnerabilities including:
+  # SQLi, XSS, XXE, SSRF, Broken Auth, IDOR, etc.
+  juice-shop:
+    image: bkimminich/juice-shop
+    container_name: bountyboy-juiceshop
+    ports:
+      - "3000:3000"
+    restart: unless-stopped
+
+  # WebGoat - OWASP learning platform
+  # Teaches web security through vulnerable lessons
+  webgoat:
+    image: webgoat/webgoat
+    container_name: bountyboy-webgoat
+    ports:
+      - "8081:8080"
+      - "9090:9090"
+    environment:
+      - WEBGOAT_PORT=8080
+      - WEBWOLF_PORT=9090
+    restart: unless-stopped
+
+  # bWAPP - Buggy Web Application
+  # 100+ vulnerabilities covering OWASP Top 10
+  bwapp:
+    image: raesene/bwapp
+    container_name: bountyboy-bwapp
+    ports:
+      - "8082:80"
+    restart: unless-stopped
+
+  # NodeGoat - Vulnerable Node.js app
+  # OWASP Top 10 for Node.js
+  nodegoat:
+    image: owasp/nodegoat
+    container_name: bountyboy-nodegoat
+    ports:
+      - "4000:4000"
+    environment:
+      - NODE_ENV=development
+    restart: unless-stopped
+
+  # Vulnerable API - For API testing
+  # REST API with common vulnerabilities
+  crapi:
+    image: crapi/crapi-identity:latest
+    container_name: bountyboy-crapi
+    ports:
+      - "8083:8080"
+    restart: unless-stopped
+
+networks:
+  default:
+    name: bountyboy-lab
