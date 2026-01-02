@@ -1,0 +1,112 @@
+# Bug Bounty Automation Configuration
+# Copy this to config.yaml and customize
+
+# Target domains to monitor
+targets:
+  - example.com
+  # - another-target.com
+
+# Notification settings
+notifications:
+  enabled: true
+  # Discord webhook URL (recommended)
+  discord_webhook: ""
+  # Slack webhook URL
+  slack_webhook: ""
+  # Email settings (optional)
+  email:
+    enabled: false
+    smtp_server: ""
+    smtp_port: 587
+    username: ""
+    password: ""
+    to_address: ""
+
+# Subdomain discovery settings
+subdomain_discovery:
+  tools:
+    subfinder: true
+    amass: false  # Disabled by default - slow but thorough, enable for deep recon
+    assetfinder: true
+    crtsh: true
+  # Timeout per tool in seconds
+  timeout: 120
+
+# Scanning settings
+scanning:
+  # Check if hosts are alive before scanning
+  httpx_alive_check: true
+  # Nmap settings
+  nmap:
+    # Quick scan: top 1000 ports
+    quick_scan_ports: "1000"
+    # Full scan threshold: if these ports found, do full scan
+    interesting_ports:
+      - 8080
+      - 8443
+      - 9000
+      - 3000
+      - 5000
+      - 8000
+    # Rate limit (packets per second)
+    rate_limit: 1000
+  # Nuclei settings
+  nuclei:
+    enabled: true
+    severity:
+      - critical
+      - high
+      - medium
+    # Template tags to use
+    tags:
+      - cve
+      - exposure
+      - misconfig
+
+# Visual recon settings
+visual_recon:
+  screenshots: true
+  tech_detection: true
+  # Timeout per screenshot in seconds
+  timeout: 30
+
+# JavaScript analysis settings
+js_analysis:
+  enabled: true
+  # Max JS files to analyze per host
+  max_files_per_host: 20
+  # Max hosts to analyze
+  max_hosts: 50
+
+# Wayback Machine settings
+wayback:
+  enabled: true
+  # Max URLs to fetch from Wayback
+  max_urls: 10000
+
+# Path fuzzing settings
+fuzzing:
+  enabled: true
+  # Categories to fuzz: critical, admin, api, backup, dev, files
+  categories:
+    - critical
+    - admin
+    - api
+    - backup
+  # Max hosts to fuzz
+  max_hosts: 30
+  # Concurrent requests per host
+  concurrency: 20
+
+# Monitoring settings
+monitoring:
+  # How often to run (in hours)
+  interval_hours: 24
+  # Keep history for X days
+  history_days: 30
+
+# Output settings
+output:
+  data_dir: "./data"
+  # Generate HTML reports
+  html_reports: true
