@@ -58,6 +58,59 @@ docker-compose ps
 2. Register a new account
 3. Explore the vulnerable features
 
+## 🧪 DVWA Security Level Testing
+
+BountyBoy includes a dedicated DVWA tester (`test_dvwa.py`) that tests all security levels:
+
+### Running the DVWA Tester
+
+```bash
+source venv/bin/activate
+python test_dvwa.py
+```
+
+### Security Levels Explained
+
+| Level | Description | Expected Results |
+|-------|-------------|------------------|
+| **LOW** | No protection | All payloads work |
+| **MEDIUM** | Basic filtering | Some bypasses work |
+| **HIGH** | Strict filtering | Advanced bypasses needed |
+| **IMPOSSIBLE** | Secure code | Nothing should work |
+
+### Test Results by Security Level
+
+#### LOW Security
+- ✅ SQLi: All payloads work (`' OR '1'='1`, UNION, etc.)
+- ✅ XSS: All payloads work (`<script>`, event handlers)
+- ✅ Command Injection: All payloads work (`;`, `|`, `&&`)
+- ✅ LFI: All payloads work (`../../../etc/passwd`)
+
+#### MEDIUM Security
+- ✅ SQLi: No-quote payloads work (`1 OR 1=1`)
+- ✅ XSS: Event handlers work (`<img onerror>`)
+- ✅ Command Injection: Pipe works (`|id`)
+- ✅ LFI: Double-dot bypass works
+
+#### HIGH Security
+- ✅ SQLi: Hash comment bypass (`#`)
+- ✅ XSS: Alternative tags work (`<img>`, `<svg>`)
+- ✅ Command Injection: Newline bypass works
+- ✅ LFI: File protocol works (`file:///`)
+
+#### IMPOSSIBLE Security
+- ❌ SQLi: Properly parameterized queries
+- ❌ XSS: Proper output encoding
+- ❌ Command Injection: Whitelist validation
+- ❌ LFI: Whitelist file access
+
+### Getting Your PHPSESSID
+
+1. Login to DVWA at http://localhost:8080
+2. Open browser DevTools (F12)
+3. Go to Application → Cookies
+4. Copy the `PHPSESSID` value
+
 ## 🎮 Testing with BountyBoy
 
 ### Add to /etc/hosts (for subdomain testing)
@@ -123,6 +176,7 @@ docker-compose down -v
 2. **Use DVWA for basics** - Classic vulns, adjustable difficulty
 3. **Check WebGoat lessons** - Explains each vulnerability
 4. **Run with --learn flag** - BountyBoy explains what it's doing
+5. **Test IMPOSSIBLE level** - Verify your scanner doesn't have false positives
 
 ## 🔗 Resources
 

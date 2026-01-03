@@ -135,11 +135,17 @@ python ultimate.py -t example.com --quick
 # Standard scan - Discovery + scanning + analysis (~10 minutes)
 python ultimate.py -t example.com --standard
 
-# Full scan - Everything including vuln checks (~20 minutes)
+# Full scan - Everything including vuln checks (~15-20 minutes)
 python ultimate.py -t example.com --full
+
+# Turbo mode - Fast parallel scan with aggressive timeouts (~5-10 minutes)
+python ultimate.py -t example.com --turbo
 
 # Insane mode - Absolutely everything (~30+ minutes)
 python ultimate.py -t example.com --insane
+
+# Deep port scan - Scan all 65535 ports (slow but thorough)
+python ultimate.py -t example.com --full --deep-ports
 ```
 
 ### Options
@@ -152,7 +158,9 @@ Options:
   --quick         Subdomain discovery only
   --standard      Discovery + scanning + analysis
   --full          + vulnerability checks
+  --turbo         Fast parallel scan (~5-10 min)
   --insane        + cloud enum + email harvest + everything
+  --deep-ports    Scan all 65535 ports (slow but thorough)
   --learn         Enable learning mode (explains each step)
   --notify        Send Discord/Slack notifications
   --report        Generate HTML/Markdown reports
