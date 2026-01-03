@@ -12,14 +12,22 @@ Quick Nmap scan finds obvious stuff. Full scan only on interesting targets.
 Nuclei runs last because it needs to know what services are running.
 """
 import json
+import asyncio
+import aiohttp
 from pathlib import Path
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from src.utils import run_tool, learn, success, error, info, warning, timestamp, check_tool_installed
 
 class Scanner:
-    def __init__(self, config: dict, learn_mode: bool = False):
+    def __init__(self, config: dict, learn_mode: bool = False, deep_ports: bool = False):
         self.config = config
         self.learn_mode = learn_mode
+        self.deep_ports = deep_ports
         self.scan_config = config['scanning']
+        # Aggressive timeouts for speed
+        self.quick_timeout = 60  # 1 min per host max
+        self.full_timeout = 180 if deep_ports else 120  # 3 min for deep, 2 min normal
+        self.max_parallel = 10   # Scan 10 hosts at once
     
     def check_alive(self, subdomains: set, output_dir: str) -> list:
         """Use httpx to find alive hosts."""
@@ -40,8 +48,8 @@ class Scanner:
             f.write('\n'.join(subdomains))
         
         success_flag, output = run_tool(
-            ["httpx", "-l", str(input_file), "-silent", "-no-color"],
-            timeout=600
+            ["httpx", "-l", str(input_file), "-silent", "-no-color", "-timeout", "5"],
+            timeout=120  # 2 min max for all hosts
         )
         
         if success_flag:
@@ -59,46 +67,51 @@ class Scanner:
             return list(subdomains)
     
     def quick_scan(self, host: str) -> dict:
-        """Quick Nmap scan - top 1000 ports."""
-        learn("Quick Port Scan",
-              "Full port scan (65535 ports) takes forever. Top 1000 ports covers "
-              "99% of common services. We scan these first. If we find something "
-              "interesting (like port 8080), THEN we do a full scan on that host. "
-              "Smart targeting, not brute force.",
-              self.learn_mode)
-        
+        """Quick Nmap scan - top 100 ports only for speed."""
         if not check_tool_installed("nmap"):
             error("nmap not installed")
             return {}
         
+        # Use top 100 ports instead of 1000 for speed
         success_flag, output = run_tool(
-            ["nmap", "-sV", "--top-ports", "1000", "-oG", "-", host],
-            timeout=300
+            ["nmap", "-sV", "--top-ports", "100", "-T4", "--max-retries", "1", 
+             "--host-timeout", "30s", "-oG", "-", host],
+            timeout=self.quick_timeout
         )
         
         if success_flag:
             return self._parse_nmap_output(output, host)
-        return {}
+        return {'host': host, 'ports': []}
     
     def full_scan(self, host: str) -> dict:
-        """Full Nmap scan - all ports."""
-        learn("Full Port Scan",
-              "When quick scan finds interesting ports, we do full scan. "
-              "Maybe there's a debug service on port 9999. Maybe there's "
-              "an admin panel on port 8888. Full scan finds these hidden services.",
-              self.learn_mode)
-        
+        """Extended scan - top 1000 ports or all 65535 if deep_ports enabled."""
         if not check_tool_installed("nmap"):
             return {}
         
-        success_flag, output = run_tool(
-            ["nmap", "-sV", "-p-", "-oG", "-", host],
-            timeout=1200
-        )
+        if self.deep_ports:
+            # Full 65535 port scan - SLOW but thorough
+            learn("Deep Port Scan",
+                  "Scanning ALL 65535 ports. This takes a long time but finds "
+                  "hidden services on non-standard ports like debug servers, "
+                  "admin panels on port 9999, etc.",
+                  self.learn_mode)
+            info(f"  Deep scanning all ports on {host} (this takes a while)...")
+            success_flag, output = run_tool(
+                ["nmap", "-sV", "-p-", "-T4", "--max-retries", "2",
+                 "--host-timeout", "10m", "-oG", "-", host],
+                timeout=900  # 15 min max for full scan
+            )
+        else:
+            # Top 1000 instead of all ports - still thorough but 60x faster
+            success_flag, output = run_tool(
+                ["nmap", "-sV", "--top-ports", "1000", "-T4", "--max-retries", "1",
+                 "--host-timeout", "60s", "-oG", "-", host],
+                timeout=self.full_timeout
+            )
         
         if success_flag:
             return self._parse_nmap_output(output, host)
-        return {}
+        return {'host': host, 'ports': []}
     
     def _parse_nmap_output(self, output: str, host: str) -> dict:
         """Parse nmap grepable output."""
@@ -127,6 +140,21 @@ class Scanner:
         found_ports = set(p['port'] for p in scan_result.get('ports', []))
         return bool(interesting & found_ports)
     
+    def _scan_host(self, host: str) -> dict:
+        """Scan a single host (for parallel execution)."""
+        info(f"  Scanning {host}...")
+        scan_result = self.quick_scan(host)
+        
+        if scan_result.get('ports'):
+            success(f"  Found {len(scan_result['ports'])} open ports on {host}")
+            
+            # Full scan if interesting ports found
+            if self.has_interesting_ports(scan_result):
+                info(f"  Interesting ports found - running full scan...")
+                scan_result = self.full_scan(host)
+        
+        return scan_result
+    
     def run_nuclei(self, hosts: list, output_dir: str) -> list:
         """Run nuclei vulnerability scanner."""
         learn("Nuclei Vulnerability Scanner",
@@ -147,7 +175,7 @@ class Scanner:
         # Write hosts to file
         input_file = Path(output_dir) / "nuclei_targets.txt"
         with open(input_file, 'w') as f:
-            for host in hosts:
+            for host in hosts[:30]:  # Limit to 30 hosts for speed
                 f.write(f"https://{host}\n")
                 f.write(f"http://{host}\n")
         
@@ -158,8 +186,9 @@ class Scanner:
         
         success_flag, output = run_tool(
             ["nuclei", "-l", str(input_file), "-severity", severity, 
-             "-tags", tags, "-json", "-o", str(output_file)],
-            timeout=1800
+             "-tags", tags, "-json", "-o", str(output_file),
+             "-timeout", "5", "-retries", "1", "-c", "50"],  # Fast settings
+            timeout=300  # 5 min max
         )
         
         findings = []
@@ -174,7 +203,7 @@ class Scanner:
         
         if findings:
             success(f"🚨 Nuclei found {len(findings)} potential vulnerabilities!")
-            for f in findings:
+            for f in findings[:10]:  # Show first 10
                 severity = f.get('info', {}).get('severity', 'unknown')
                 name = f.get('info', {}).get('name', 'Unknown')
                 host = f.get('host', '')
@@ -185,10 +214,10 @@ class Scanner:
         return findings
     
     def scan(self, subdomains: set, output_dir: str) -> dict:
-        """Run full scanning pipeline."""
+        """Run full scanning pipeline with parallel execution."""
         learn("Scanning Strategy",
               "We're smart about scanning. Check alive first (httpx). "
-              "Quick scan everyone (top 1000 ports). Full scan only interesting ones. "
+              "Quick scan everyone (top 100 ports). Full scan only interesting ones. "
               "Then nuclei for known vulns. This is 10x faster than scanning everything.",
               self.learn_mode)
         
@@ -210,25 +239,21 @@ class Scanner:
             warning("No alive hosts found")
             return results
         
-        # Step 2: Quick scan all alive hosts
-        info(f"Step 2: Quick scanning {len(alive)} hosts...")
-        for host in alive:
-            info(f"  Scanning {host}...")
-            scan_result = self.quick_scan(host)
+        # Step 2: Parallel scan all alive hosts
+        info(f"Step 2: Quick scanning {len(alive)} hosts (parallel)...")
+        
+        # Use ThreadPoolExecutor for parallel nmap scans
+        with ThreadPoolExecutor(max_workers=self.max_parallel) as executor:
+            future_to_host = {executor.submit(self._scan_host, host): host for host in alive[:30]}  # Limit to 30
             
-            if scan_result.get('ports'):
-                success(f"  Found {len(scan_result['ports'])} open ports on {host}")
-                
-                # Full scan if interesting ports found
-                if self.has_interesting_ports(scan_result):
-                    learn("Interesting Port Detected",
-                          f"Found interesting port on {host}. Doing full scan to find "
-                          "any other hidden services. This host is worth investigating.",
-                          self.learn_mode)
-                    info(f"  Interesting ports found - running full scan...")
-                    scan_result = self.full_scan(host)
-            
-            results['scan_results'].append(scan_result)
+            for future in as_completed(future_to_host):
+                try:
+                    scan_result = future.result(timeout=self.full_timeout)
+                    if scan_result:
+                        results['scan_results'].append(scan_result)
+                except Exception as e:
+                    host = future_to_host[future]
+                    warning(f"  Scan failed for {host}: {e}")
         
         # Save scan results
         scan_file = Path(output_dir) / f"scan_{timestamp()}.json"

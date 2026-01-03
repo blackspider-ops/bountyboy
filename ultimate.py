@@ -128,10 +128,12 @@ BANNER = """
 @click.option('--standard', is_flag=True, help='Standard: discovery + scanning + analysis')
 @click.option('--full', is_flag=True, help='Full: everything including all vuln checks')
 @click.option('--insane', is_flag=True, help='Insane: absolutely everything, takes longest')
+@click.option('--turbo', is_flag=True, help='Turbo: fast parallel scan, aggressive timeouts (~5-10 min)')
+@click.option('--deep-ports', is_flag=True, help='Scan all 65535 ports (slow but thorough)')
 @click.option('--notify', is_flag=True, help='Send notifications')
 @click.option('--report', is_flag=True, help='Generate HTML/MD reports')
 def main(target: str, learn_mode: bool, config: str, quick: bool, standard: bool,
-         full: bool, insane: bool, notify: bool, report: bool):
+         full: bool, insane: bool, turbo: bool, deep_ports: bool, notify: bool, report: bool):
     """
     BountyBoy - The Complete Arsenal
     
@@ -140,12 +142,17 @@ def main(target: str, learn_mode: bool, config: str, quick: bool, standard: bool
         --standard : Discovery + scanning + deep analysis (~10 minutes)
         --full     : + vulnerability checks (~20 minutes)
         --insane   : + cloud enum + email harvest + everything (~30+ minutes)
+        --turbo    : Fast parallel scan with aggressive timeouts (~5-10 min)
+    
+    Options:
+        --deep-ports : Scan all 65535 ports (very slow, use when needed)
     
     Examples:
         python ultimate.py -t example.com --quick
         python ultimate.py -t example.com --standard --learn
         python ultimate.py -t example.com --full --notify --report
-        python ultimate.py -t example.com --insane --report
+        python ultimate.py -t example.com --turbo --report
+        python ultimate.py -t example.com --full --deep-ports  # Thorough port scan
     """
     console.print(BANNER)
     start_time = datetime.now()
@@ -159,6 +166,8 @@ def main(target: str, learn_mode: bool, config: str, quick: bool, standard: bool
         mode = 'full'
     elif insane:
         mode = 'insane'
+    elif turbo:
+        mode = 'turbo'
     else:
         mode = 'standard'
     
@@ -176,6 +185,7 @@ def main(target: str, learn_mode: bool, config: str, quick: bool, standard: bool
     console.print(Panel(
         f"[bold]Target:[/bold] {target}\n"
         f"[bold]Mode:[/bold] {mode.upper()}\n"
+        f"[bold]Deep Ports:[/bold] {'ON (all 65535)' if deep_ports else 'OFF (top 100)'}\n"
         f"[bold]Learn:[/bold] {'ON' if learn_mode else 'OFF'}\n"
         f"[bold]Notify:[/bold] {'ON' if notify else 'OFF'}\n"
         f"[bold]Report:[/bold] {'ON' if report else 'OFF'}\n"
@@ -184,8 +194,8 @@ def main(target: str, learn_mode: bool, config: str, quick: bool, standard: bool
         border_style="cyan"
     ))
     
-    # Initialize all modules
-    modules = initialize_modules(cfg, learn_mode, notify)
+    # Initialize all modules with deep_ports flag
+    modules = initialize_modules(cfg, learn_mode, notify, deep_ports)
     
     # Results container
     results = initialize_results(target, mode)
@@ -207,6 +217,13 @@ def main(target: str, learn_mode: bool, config: str, quick: bool, standard: bool
     
     if mode == 'quick':
         finalize(results, start_time, dirs, modules, report)
+        return
+    
+    # ═══════════════════════════════════════════════════════════════
+    # TURBO MODE - Fast parallel scan
+    # ═══════════════════════════════════════════════════════════════
+    if mode == 'turbo':
+        run_turbo_scan(target, results, modules, dirs, report, start_time)
         return
     
     # ═══════════════════════════════════════════════════════════════
@@ -296,7 +313,7 @@ def main(target: str, learn_mode: bool, config: str, quick: bool, standard: bool
     
     # Google Dorking
     console.print("[cyan]▶ Google Dork Generation[/cyan]")
-    google_results = modules['google_dorker'].generate_dorks(target, dirs['scans'])
+    google_results = modules['google_dorker'].analyze(target, dirs['scans'])
     results['google_dorks'] = google_results.get('dorks', [])
     
     # DNS Analysis (Zone Transfer, etc.)
@@ -311,12 +328,20 @@ def main(target: str, learn_mode: bool, config: str, quick: bool, standard: bool
     
     # SQLi Quick Check
     console.print("\n[cyan]▶ SQL Injection Quick Check[/cyan]")
-    sqli_results = modules['sqli'].scan(hosts[:15], results['wayback_params'], dirs['scans'])
+    # Combine hosts with wayback params for SQLi testing
+    sqli_urls = [f"http://{h}" for h in hosts[:15]]
+    if results.get('wayback_params'):
+        sqli_urls.extend(results['wayback_params'][:20])
+    sqli_results = modules['sqli'].scan(sqli_urls, dirs['scans'])
     results['sqli_vulns'] = sqli_results.get('vulnerable', [])
     
     # XSS Quick Check
     console.print("\n[cyan]▶ XSS Quick Check[/cyan]")
-    xss_results = modules['xss'].scan(hosts[:15], results['wayback_params'], dirs['scans'])
+    # Combine hosts with wayback params for XSS testing
+    xss_urls = [f"http://{h}" for h in hosts[:15]]
+    if results.get('wayback_params'):
+        xss_urls.extend(results['wayback_params'][:20])
+    xss_results = modules['xss'].scan(xss_urls, dirs['scans'])
     results['xss_vulns'] = xss_results.get('vulnerable', [])
     
     # Favicon Hash Lookup
@@ -393,11 +418,135 @@ def main(target: str, learn_mode: bool, config: str, quick: bool, standard: bool
     finalize(results, start_time, dirs, modules, report)
 
 
-def initialize_modules(cfg: dict, learn_mode: bool, notify: bool) -> dict:
+def run_turbo_scan(target: str, results: dict, modules: dict, dirs: dict, 
+                   generate_report: bool, start_time: datetime):
+    """
+    TURBO MODE - Fast parallel scanning with aggressive timeouts.
+    Runs key modules in parallel, limits hosts, skips slow modules.
+    Target: Complete in 5-10 minutes.
+    """
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+    import asyncio
+    
+    print_phase("TURBO MODE - FAST PARALLEL SCAN")
+    console.print("[yellow]⚡ Running with aggressive timeouts and parallel execution[/yellow]\n")
+    
+    hosts = list(results['subdomains'])[:20]  # Limit to 20 hosts
+    results['alive_hosts'] = hosts  # Skip alive check for speed
+    
+    # Phase 1: Quick parallel tasks (run simultaneously)
+    console.print("[cyan]▶ Phase 1: Parallel Reconnaissance[/cyan]")
+    
+    with ThreadPoolExecutor(max_workers=6) as executor:
+        futures = {}
+        
+        # Submit all tasks
+        futures['wayback'] = executor.submit(
+            modules['wayback'].analyze, target, dirs['scans']
+        )
+        futures['headers'] = executor.submit(
+            modules['headers'].analyze, hosts[:10], dirs['scans']
+        )
+        futures['js'] = executor.submit(
+            modules['js'].analyze, hosts[:10], dirs['scans']
+        )
+        futures['fuzzer'] = executor.submit(
+            modules['fuzzer'].fuzz, hosts[:10], dirs['scans']
+        )
+        futures['takeover'] = executor.submit(
+            modules['takeover'].check, hosts, dirs['scans']
+        )
+        futures['cors'] = executor.submit(
+            modules['cors'].check, hosts[:10], target, dirs['scans']
+        )
+        
+        # Collect results with timeout
+        for name, future in futures.items():
+            try:
+                result = future.result(timeout=120)  # 2 min max per task
+                if name == 'wayback':
+                    results['wayback_urls'] = result.get('total_urls', 0)
+                    results['wayback_alive'] = result.get('alive_interesting', [])
+                    results['wayback_params'] = list(set(
+                        p for params in result.get('parameters', {}).values() for p in params
+                    ))
+                elif name == 'headers':
+                    results['header_issues'] = result.get('common_missing', {})
+                elif name == 'js':
+                    results['js_secrets'] = result.get('secrets', [])
+                    results['js_endpoints'] = result.get('api_endpoints', [])
+                elif name == 'fuzzer':
+                    results['fuzz_findings'] = result.get('critical_findings', [])
+                elif name == 'takeover':
+                    results['takeover_vulns'] = result.get('vulnerable', [])
+                elif name == 'cors':
+                    results['cors_vulns'] = result.get('vulnerable_endpoints', [])
+                success(f"  ✓ {name} complete")
+            except Exception as e:
+                warning(f"  ✗ {name} failed/timeout: {str(e)[:50]}")
+    
+    # Phase 2: Vulnerability scanning (parallel async)
+    console.print("\n[cyan]▶ Phase 2: Vulnerability Scanning[/cyan]")
+    
+    # Build URLs for vuln scanning
+    vuln_urls = [f"http://{h}" for h in hosts[:10]]
+    if results.get('wayback_params'):
+        vuln_urls.extend(results['wayback_params'][:15])
+    
+    with ThreadPoolExecutor(max_workers=5) as executor:
+        vuln_futures = {}
+        
+        vuln_futures['sqli'] = executor.submit(
+            modules['sqli'].scan, vuln_urls[:20], dirs['scans']
+        )
+        vuln_futures['xss'] = executor.submit(
+            modules['xss'].scan, vuln_urls[:20], dirs['scans']
+        )
+        vuln_futures['ssrf'] = executor.submit(
+            modules['ssrf'].scan, hosts[:10], dirs['scans']
+        )
+        vuln_futures['open_redirect'] = executor.submit(
+            modules['open_redirect'].scan, hosts[:10], dirs['scans']
+        )
+        vuln_futures['api'] = executor.submit(
+            modules['api_fuzzer'].fuzz, hosts[:10], dirs['scans']
+        )
+        
+        for name, future in vuln_futures.items():
+            try:
+                result = future.result(timeout=180)  # 3 min max
+                if name == 'sqli':
+                    results['sqli_vulns'] = result.get('vulnerable', [])
+                elif name == 'xss':
+                    results['xss_vulns'] = result.get('vulnerable', [])
+                elif name == 'ssrf':
+                    results['ssrf_vulns'] = result.get('critical_findings', []) + result.get('high_findings', [])
+                elif name == 'open_redirect':
+                    results['open_redirects'] = result.get('vulnerable', [])
+                elif name == 'api':
+                    results['api_endpoints'] = result.get('endpoints_found', [])
+                    results['api_critical'] = result.get('critical_findings', [])
+                success(f"  ✓ {name} complete")
+            except Exception as e:
+                warning(f"  ✗ {name} failed/timeout: {str(e)[:50]}")
+    
+    # Phase 3: Generate dorks (instant)
+    console.print("\n[cyan]▶ Phase 3: Dork Generation[/cyan]")
+    try:
+        modules['google_dorker'].analyze(target, dirs['scans'])
+        modules['github'].analyze(target, dirs['scans'])
+        success("  ✓ Dorks generated")
+    except Exception as e:
+        warning(f"  ✗ Dork generation failed: {e}")
+    
+    finalize(results, start_time, dirs, modules, generate_report)
+
+
+def initialize_modules(cfg: dict, learn_mode: bool, notify: bool, deep_ports: bool = False) -> dict:
     """Initialize all modules."""
     return {
         'discovery': AsyncSubdomainDiscovery(cfg, learn_mode),
-        'scanner': Scanner(cfg, learn_mode),
+        'scanner': Scanner(cfg, learn_mode, deep_ports),
         'visual': VisualRecon(cfg, learn_mode),
         'js': JSAnalyzer(cfg, learn_mode),
         'wayback': WaybackAnalyzer(cfg, learn_mode),
